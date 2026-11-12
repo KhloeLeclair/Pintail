@@ -52,9 +52,9 @@ namespace Nanoray.Pintail
             {
                 if (instance is TProxy proxy)
                     return proxy;
-                if (instance is not IInternalProxyObject internalProxyObject)
+                if (!IInternalProxyObject.TryGetProxyTargetInstance(instance, out object? proxyTargetInstance))
                     break;
-                instance = internalProxyObject.ProxyTargetInstance;
+                instance = proxyTargetInstance;
             }
 
             var factory = self.ObtainProxyFactory(new ProxyInfo<Context>(
@@ -86,9 +86,9 @@ namespace Nanoray.Pintail
                         proxy = preexistingProxy;
                         return true;
                     }
-                    if (toProxy is not IInternalProxyObject internalProxyObject)
+                    if (!IInternalProxyObject.TryGetProxyTargetInstance(toProxy, out object? proxyTargetInstance))
                         break;
-                    toProxy = internalProxyObject.ProxyTargetInstance;
+                    toProxy = proxyTargetInstance;
                 }
 
                 foreach (var interfaceType in toProxy.GetType().GetInterfacesRecursively(includingSelf: true))
@@ -147,9 +147,9 @@ namespace Nanoray.Pintail
                         proxy = preexistingProxy;
                         return true;
                     }
-                    if (toProxy is not IInternalProxyObject internalProxyObject)
+                    if (!IInternalProxyObject.TryGetProxyTargetInstance(toProxy, out object? proxyTargetInstance))
                         break;
-                    toProxy = internalProxyObject.ProxyTargetInstance;
+                    toProxy = proxyTargetInstance;
                 }
 
                 foreach (var interfaceType in toProxy.GetType().GetInterfacesRecursively(includingSelf: true))

@@ -19,14 +19,30 @@ namespace Nanoray.Pintail
         public readonly TypeInfo<Context> Proxy;
 
         /// <summary>
+        /// Whether this conversion flows the opposite way to the one originally requested, which may relax requirements.
+        /// </summary>
+        public readonly bool IsReversed;
+
+        /// <summary>
         /// Creates a new <see cref="ProxyInfo{Context}"/>.
         /// </summary>
         /// <param name="target">The context of the target instance.</param>
         /// <param name="proxy">The context of the proxy instance.</param>
-        public ProxyInfo(TypeInfo<Context> target, TypeInfo<Context> proxy)
+        public ProxyInfo(TypeInfo<Context> target, TypeInfo<Context> proxy) : this(target, proxy, false)
+        {
+        }
+
+        /// <summary>
+        /// Creates a new <see cref="ProxyInfo{Context}"/>.
+        /// </summary>
+        /// <param name="target">The context of the target instance.</param>
+        /// <param name="proxy">The context of the proxy instance.</param>
+        /// <param name="isReversed">Whether this conversion flows the opposite direction to the one originally requested.</param>
+        public ProxyInfo(TypeInfo<Context> target, TypeInfo<Context> proxy, bool isReversed)
         {
             this.Target = target;
             this.Proxy = proxy;
+            this.IsReversed = isReversed;
         }
 
         /// <summary>
@@ -39,7 +55,8 @@ namespace Nanoray.Pintail
         {
             return new(
                 target: new TypeInfo<Context>(this.Target.Context, targetType ?? this.Target.Type),
-                proxy: new TypeInfo<Context>(this.Proxy.Context, proxyType ?? this.Proxy.Type)
+                proxy: new TypeInfo<Context>(this.Proxy.Context, proxyType ?? this.Proxy.Type),
+                isReversed: this.IsReversed
             );
         }
 
@@ -49,7 +66,11 @@ namespace Nanoray.Pintail
         /// <returns>A copy with reversed target and proxy types.</returns>
         public ProxyInfo<Context> Reversed()
         {
-            return this.Copy(targetType: this.Proxy.Type, proxyType: this.Target.Type);
+            return new(
+                target: new TypeInfo<Context>(this.Target.Context, this.Proxy.Type),
+                proxy: new TypeInfo<Context>(this.Proxy.Context, this.Target.Type),
+                isReversed: !this.IsReversed
+            );
         }
 
         /// <summary>
@@ -57,15 +78,15 @@ namespace Nanoray.Pintail
         /// </summary>
         /// <param name="typeNameProvider">A delegate providing type names.</param>
         public string GetNameSuitableForProxyTypeName(Func<Type, string> typeNameProvider)
-            => $"From<{this.Proxy.GetNameSuitableForProxyTypeName(typeNameProvider)}>_To<{this.Target.GetNameSuitableForProxyTypeName(typeNameProvider)}>";
+            => $"From<{this.Proxy.GetNameSuitableForProxyTypeName(typeNameProvider)}>_To<{this.Target.GetNameSuitableForProxyTypeName(typeNameProvider)}>{(this.IsReversed ? "_Reversed" : "")}";
 
         /// <inheritdoc/>
         public override string ToString()
-            => $"ProxyInfo{{target: {this.Target}, proxy: {this.Proxy}}}";
+            => $"ProxyInfo{{target: {this.Target}, proxy: {this.Proxy}{(this.IsReversed ? ", reversed" : "")}}}";
 
         /// <inheritdoc/>
         public bool Equals(ProxyInfo<Context> other)
-            => this.Target.Equals(other.Target) && this.Proxy.Equals(other.Proxy);
+            => this.Target.Equals(other.Target) && this.Proxy.Equals(other.Proxy) && this.IsReversed == other.IsReversed;
 
         /// <inheritdoc/>
         public override bool Equals(object? obj)
@@ -73,7 +94,7 @@ namespace Nanoray.Pintail
 
         /// <inheritdoc/>
         public override int GetHashCode()
-            => (this.Target, this.Proxy).GetHashCode();
+            => (this.Target, this.Proxy, this.IsReversed).GetHashCode();
 
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
         public static bool operator ==(ProxyInfo<Context> left, ProxyInfo<Context> right)

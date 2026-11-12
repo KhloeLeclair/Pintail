@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -80,6 +80,24 @@ namespace Nanoray.Pintail
         /// Allow mismatched array types; do not map array elements back.
         /// </summary>
         AllowAndDontMapBack
+    }
+
+    /// <summary>
+    /// Defines the behavior to use when matching types of values passed to the target side as method parameters.
+    /// </summary>
+    public enum ProxyManagerInputMappingBehavior
+    {
+        /// <summary>
+        /// A value passed to the target side has to be fully proxiable into the target's type.
+        /// </summary>
+        Strict,
+
+        /// <summary>
+        /// Allow types which are only proxiable in the reverse direction. Invalid values will be rejected at runtime.
+        /// This allows the proxying side to declare only a subset of an interface while remaining able to pass values
+        /// it received from the proxy back into the proxy.
+        /// </summary>
+        AllowRoundTrip
     }
 
     file static class ProxyManagerConfiguration
@@ -218,6 +236,11 @@ namespace Nanoray.Pintail
         /// The behavior to use when mapping mismatched <see cref="Array"/> elements back and forth.
         /// </summary>
         public ProxyManagerMismatchedArrayMappingBehavior MismatchedArrayMappingBehavior { get; init; } = ProxyManagerMismatchedArrayMappingBehavior.Throw;
+
+        /// <summary>
+        /// The behavior to use when mapping types passed to the target side as method parameters.
+        /// </summary>
+        public ProxyManagerInputMappingBehavior InputMappingBehavior { get; init; } = ProxyManagerInputMappingBehavior.Strict;
 
         /// <summary>
         /// Whether proxy types should implement any marker interfaces.

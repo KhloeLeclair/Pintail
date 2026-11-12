@@ -35,6 +35,7 @@ namespace Nanoray.Pintail
         private readonly ProxyManagerNoMatchingMethodHandler<Context> NoMatchingMethodHandler;
         private readonly ProxyManagerProxyPrepareBehavior ProxyPrepareBehavior;
         private readonly ProxyManagerEnumMappingBehavior EnumMappingBehavior;
+        private readonly ProxyManagerInputMappingBehavior InputMappingBehavior;
         private readonly ProxyObjectInterfaceMarking ProxyObjectInterfaceMarking;
         private readonly AccessLevelChecking AccessLevelChecking;
         private readonly ProxyManagerSynchronization Synchronization;
@@ -51,6 +52,7 @@ namespace Nanoray.Pintail
             ProxyManagerNoMatchingMethodHandler<Context> noMatchingMethodHandler,
             ProxyManagerProxyPrepareBehavior proxyPrepareBehavior,
             ProxyManagerEnumMappingBehavior enumMappingBehavior,
+            ProxyManagerInputMappingBehavior inputMappingBehavior,
             ProxyObjectInterfaceMarking proxyObjectInterfaceMarking,
             AccessLevelChecking accessLevelChecking,
             ProxyManagerSynchronization synchronization,
@@ -77,11 +79,17 @@ namespace Nanoray.Pintail
             this.NoMatchingMethodHandler = noMatchingMethodHandler;
             this.ProxyPrepareBehavior = proxyPrepareBehavior;
             this.EnumMappingBehavior = enumMappingBehavior;
+            this.InputMappingBehavior = inputMappingBehavior;
             this.ProxyObjectInterfaceMarking = proxyObjectInterfaceMarking;
             this.InterfaceMappabilityCache = interfaceMappabilityCache;
             this.AccessLevelChecking = accessLevelChecking;
             this.Synchronization = synchronization;
         }
+
+        /// <summary>
+        /// Whether matching should treat the target as being on the original proxy side.
+        /// </summary>
+        private bool IsReversed => this.InputMappingBehavior == ProxyManagerInputMappingBehavior.AllowRoundTrip && this.ProxyInfo.IsReversed;
 
         internal void Prepare(ProxyManager<Context> manager, string typeName)
         {
@@ -121,7 +129,7 @@ namespace Nanoray.Pintail
                 var candidates = new Dictionary<MethodInfo, TypeUtilities.PositionConversion?[]>();
                 foreach (var targetMethod in allTargetMethods)
                 {
-                    var positionConversions = TypeUtilities.MatchProxyMethod(targetMethod, proxyMethod, this.EnumMappingBehavior, ImmutableHashSet.Create(this.ProxyInfo.Target.Type, this.ProxyInfo.Proxy.Type), this.InterfaceMappabilityCache, this.AccessLevelChecking == AccessLevelChecking.Disabled);
+                    var positionConversions = TypeUtilities.MatchProxyMethod(targetMethod, proxyMethod, this.EnumMappingBehavior, this.InputMappingBehavior, ImmutableHashSet.Create(this.ProxyInfo.Target.Type, this.ProxyInfo.Proxy.Type), this.InterfaceMappabilityCache, this.AccessLevelChecking == AccessLevelChecking.Disabled, this.IsReversed);
                     if (positionConversions is null)
                         continue;
 
@@ -145,7 +153,7 @@ namespace Nanoray.Pintail
                 }
                 else if (proxyMethod is { IsAbstract: false, DeclaringType.IsInterface: true })
                 {
-                    var positionConversions = TypeUtilities.MatchProxyMethod(proxyMethod, proxyMethod, this.EnumMappingBehavior, ImmutableHashSet.Create(this.ProxyInfo.Target.Type, this.ProxyInfo.Proxy.Type), this.InterfaceMappabilityCache, this.AccessLevelChecking == AccessLevelChecking.Disabled);
+                    var positionConversions = TypeUtilities.MatchProxyMethod(proxyMethod, proxyMethod, this.EnumMappingBehavior, this.InputMappingBehavior, ImmutableHashSet.Create(this.ProxyInfo.Target.Type, this.ProxyInfo.Proxy.Type), this.InterfaceMappabilityCache, this.AccessLevelChecking == AccessLevelChecking.Disabled, this.IsReversed);
                     if (positionConversions is null)
                     {
                         this.EarlyNoMatchingMethodHandler?.Invoke(this.ProxyInfo, proxyMethod);
@@ -336,21 +344,13 @@ namespace Nanoray.Pintail
                 case TypeUtilities.PositionConversion.Proxy:
                     returnValueTargetToArgProxyInfoIndex = relatedProxyInfos.Count;
                     relatedProxyInfos.Add(this.ProxyInfo.Copy(targetType: target.ReturnType.GetNonRefType(), proxyType: proxy.ReturnType.GetNonRefType()));
-                    switch (this.ProxyPrepareBehavior)
-                    {
-                        case ProxyManagerProxyPrepareBehavior.Eager:
-                            var proxyInfo = relatedProxyInfos.Last();
-                            if (!proxyInfo.Proxy.Type.ContainsGenericParameters && !proxyInfo.Target.Type.ContainsGenericParameters)
-                                manager.ObtainProxyFactory(relatedProxyInfos.Last());
-                            break;
-                        case ProxyManagerProxyPrepareBehavior.Lazy:
-                            break;
-                    }
+                    this.RegisterRelatedProxyInfo(manager, relatedProxyInfos.Last(), prepareForward: true, prepareReverse: false);
                     break;
                 case null:
                     break;
             }
 
+            var proxyParameters = proxy.GetParameters();
             for (int i = 0; i < targetParameters.Length; i++)
             {
                 switch (positionConversions[i + 1])
@@ -361,16 +361,14 @@ namespace Nanoray.Pintail
 
                         parameterTargetToArgProxyInfoIndexes[i] = relatedProxyInfos.Count;
                         relatedProxyInfos.Add(this.ProxyInfo.Copy(targetType: targetType.GetNonRefType(), proxyType: argType.GetNonRefType()));
-                        switch (this.ProxyPrepareBehavior)
-                        {
-                            case ProxyManagerProxyPrepareBehavior.Eager:
-                                var proxyInfo = relatedProxyInfos.Last();
-                                if (!proxyInfo.Proxy.Type.ContainsGenericParameters && !proxyInfo.Target.Type.ContainsGenericParameters)
-                                    manager.ObtainProxyFactory(relatedProxyInfos.Last());
-                                break;
-                            case ProxyManagerProxyPrepareBehavior.Lazy:
-                                break;
-                        }
+
+                        var flow = TypeUtilities.GetParameterFlow(targetParameters[i], proxyParameters[i]);
+                        this.RegisterRelatedProxyInfo(
+                            manager,
+                            relatedProxyInfos.Last(),
+                            prepareForward: flow.HasFlag(TypeUtilities.ParameterFlow.Out) || argType.GetNonRefType().IsArray,
+                            prepareReverse: flow.HasFlag(TypeUtilities.ParameterFlow.In)
+                        );
                         break;
                     case null:
                         break;
@@ -593,6 +591,28 @@ namespace Nanoray.Pintail
                 proxyBuilder.DefineMethodOverride(methodBuilder, proxy);
         }
 
+        private void RegisterRelatedProxyInfo(ProxyManager<Context> manager, ProxyInfo<Context> proxyInfo, bool prepareForward, bool prepareReverse)
+        {
+            if (this.ProxyPrepareBehavior != ProxyManagerProxyPrepareBehavior.Eager)
+                return;
+            if (proxyInfo.Proxy.Type.ContainsGenericParameters || proxyInfo.Target.Type.ContainsGenericParameters)
+                return;
+
+            bool isProxyInterface = proxyInfo.Proxy.Type.IsInterface;
+            bool areBothDelegates = proxyInfo.Proxy.Type.IsAssignableTo(typeof(Delegate)) && proxyInfo.Target.Type.IsAssignableTo(typeof(Delegate));
+            bool checkMappability = this.InputMappingBehavior == ProxyManagerInputMappingBehavior.AllowRoundTrip && (isProxyInterface || areBothDelegates);
+
+            if (prepareForward && (!checkMappability || this.IsMappable(proxyInfo, TypeUtilities.MethodTypeAssignability.AssignFrom)))
+                manager.ObtainProxyFactory(proxyInfo);
+            if (prepareReverse && (!checkMappability || ((proxyInfo.Target.Type.IsInterface || areBothDelegates) && this.IsMappable(proxyInfo, TypeUtilities.MethodTypeAssignability.AssignTo))))
+                manager.ObtainProxyFactory(proxyInfo.Reversed());
+        }
+
+        private bool IsMappable(ProxyInfo<Context> proxyInfo, TypeUtilities.MethodTypeAssignability assignability)
+        {
+            return TypeUtilities.AreTypesMatching(proxyInfo.Target.Type, proxyInfo.Proxy.Type, assignability, this.EnumMappingBehavior, this.InputMappingBehavior, ImmutableHashSet<Type>.Empty, this.InterfaceMappabilityCache, this.AccessLevelChecking == AccessLevelChecking.Disabled, this.IsReversed) != TypeUtilities.MatchingTypesResult.False;
+        }
+
         /// <inheritdoc/>
         public object ObtainProxy(IProxyManager<Context> manager, object targetInstance)
         {
@@ -649,16 +669,7 @@ namespace Nanoray.Pintail
 
         /// <inheritdoc/>
         public bool TryUnproxy(IProxyManager<Context> manager, object potentialProxyInstance, [NotNullWhen(true)] out object? targetInstance)
-        {
-            if (potentialProxyInstance is not IInternalProxyObject proxyInstance)
-            {
-                targetInstance = null;
-                return false;
-            }
-
-            targetInstance = proxyInstance.ProxyTargetInstance;
-            return true;
-        }
+            => IInternalProxyObject.TryGetProxyTargetInstance(potentialProxyInstance, out targetInstance);
 
         private record MethodProxyInfo(
             MethodInfo Proxy,

@@ -122,6 +122,7 @@ namespace Nanoray.Pintail
                         this.Configuration.NoMatchingMethodHandler,
                         this.Configuration.ProxyPrepareBehavior,
                         this.Configuration.EnumMappingBehavior,
+                        this.Configuration.InputMappingBehavior,
                         this.Configuration.ProxyObjectInterfaceMarking,
                         this.Configuration.AccessLevelChecking,
                         this.Configuration.Synchronization,

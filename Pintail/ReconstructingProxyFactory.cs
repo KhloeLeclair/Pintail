@@ -139,7 +139,7 @@ namespace Nanoray.Pintail
                     {
                         int deconstructValueIndex = i + (deconstructViaExtensionMethod ? 1 : 0);
                         constructValues[i] = deconstructValues[deconstructValueIndex];
-                        switch (TypeUtilities.AreTypesMatching(factoryParameters[i].ParameterType, deconstructValues[deconstructValueIndex]!.GetType(), TypeUtilities.MethodTypeAssignability.AssignTo, this.EnumMappingBehavior, ImmutableHashSet<Type>.Empty, this.InterfaceMappabilityCache, this.AccessLevelChecking == AccessLevelChecking.Disabled))
+                        switch (TypeUtilities.AreTypesMatching(factoryParameters[i].ParameterType, deconstructValues[deconstructValueIndex]!.GetType(), TypeUtilities.MethodTypeAssignability.AssignTo, this.EnumMappingBehavior, ProxyManagerInputMappingBehavior.Strict, ImmutableHashSet<Type>.Empty, this.InterfaceMappabilityCache, this.AccessLevelChecking == AccessLevelChecking.Disabled, reversed: false))
                         {
                             case TypeUtilities.MatchingTypesResult.Exact:
                             case TypeUtilities.MatchingTypesResult.Assignable:
@@ -147,7 +147,8 @@ namespace Nanoray.Pintail
                             case TypeUtilities.MatchingTypesResult.IfProxied:
                                 ProxyInfo<Context> proxyInfo = new(
                                     target: new TypeInfo<Context>(this.ProxyInfo.Target.Context, constructValues[i]!.GetType()),
-                                    proxy: new TypeInfo<Context>(this.ProxyInfo.Proxy.Context, factoryParameters[i].ParameterType)
+                                    proxy: new TypeInfo<Context>(this.ProxyInfo.Proxy.Context, factoryParameters[i].ParameterType),
+                                    isReversed: this.ProxyInfo.IsReversed != isReverse
                                 );
                                 var factory = manager.ObtainProxyFactory(proxyInfo);
                                 constructValues[i] = factory.ObtainProxy(manager, constructValues[i]!);

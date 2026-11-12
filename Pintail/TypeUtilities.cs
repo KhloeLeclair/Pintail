@@ -41,9 +41,11 @@ namespace Nanoray.Pintail
             Type proxyType,
             MethodTypeAssignability assignability,
             ProxyManagerEnumMappingBehavior enumMappingBehavior,
+            ProxyManagerInputMappingBehavior inputMappingBehavior,
             ImmutableHashSet<Type> assumeMappableIfRecursed,
             ConcurrentDictionary<string, List<Type>> interfaceMappabilityCache,
-            bool includePrivate
+            bool includePrivate,
+            bool reversed
         )
         {
             // Exact match, don't need to look further.
@@ -93,7 +95,7 @@ namespace Nanoray.Pintail
             }
 
             if (proxyType.IsArray && targetType.IsArray)
-                return (MatchingTypesResult)Math.Min((int)AreTypesMatching(targetType.GetElementType()!, proxyType.GetElementType()!, assignability, enumMappingBehavior, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate), (int)MatchingTypesResult.IfProxied);
+                return (MatchingTypesResult)Math.Min((int)AreTypesMatching(targetType.GetElementType()!, proxyType.GetElementType()!, assignability, enumMappingBehavior, inputMappingBehavior, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate, reversed), (int)MatchingTypesResult.IfProxied);
 
             // check mismatched generics.
             if (proxyType.IsGenericMethodParameter)
@@ -111,7 +113,7 @@ namespace Nanoray.Pintail
             {
                 if (assumeMappableIfRecursed.Contains(targetType))
                     return MatchingTypesResult.IfProxied; // we will need to double check this later.
-                if (CanInterfaceBeMapped(targetType, proxyType, delegateCheck: false, enumMappingBehavior, assignability, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate))
+                if (CanInterfaceBeMapped(targetType, proxyType, delegateCheck: false, enumMappingBehavior, inputMappingBehavior, assignability, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate, reversed))
                     return MatchingTypesResult.IfProxied;
                 return MatchingTypesResult.False;
             }
@@ -119,7 +121,7 @@ namespace Nanoray.Pintail
             {
                 if (assumeMappableIfRecursed.Contains(proxyType))
                     return MatchingTypesResult.IfProxied; // we will need to double check this later.
-                if (CanInterfaceBeMapped(targetType, proxyType, delegateCheck: false, enumMappingBehavior, assignability, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate))
+                if (CanInterfaceBeMapped(targetType, proxyType, delegateCheck: false, enumMappingBehavior, inputMappingBehavior, assignability, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate, reversed))
                     return MatchingTypesResult.IfProxied;
                 return MatchingTypesResult.False;
             }
@@ -133,7 +135,7 @@ namespace Nanoray.Pintail
             {
                 if (assumeMappableIfRecursed.Contains(proxyType))
                     return MatchingTypesResult.IfProxied;
-                if (CanInterfaceBeMapped(targetType, proxyType, delegateCheck: true, enumMappingBehavior, assignability, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate))
+                if (CanInterfaceBeMapped(targetType, proxyType, delegateCheck: true, enumMappingBehavior, inputMappingBehavior, assignability, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate, reversed))
                     return MatchingTypesResult.IfProxied;
                 return MatchingTypesResult.False;
             }
@@ -149,7 +151,7 @@ namespace Nanoray.Pintail
                 {
                     var genericTargetType = targetType.GetGenericTypeDefinition();
                     var genericProxyType = proxyType.GetGenericTypeDefinition();
-                    switch (AreTypesMatching(genericTargetType, genericProxyType, assignability, enumMappingBehavior, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate))
+                    switch (AreTypesMatching(genericTargetType, genericProxyType, assignability, enumMappingBehavior, inputMappingBehavior, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate, reversed))
                     {
                         case MatchingTypesResult.Exact:
                         case MatchingTypesResult.Assignable:
@@ -164,7 +166,7 @@ namespace Nanoray.Pintail
             }
             for (int i = 0; i < targetTypeGenericArguments.Length; i++)
             {
-                switch (AreTypesMatching(targetTypeGenericArguments[i], proxyTypeGenericArguments[i], assignability, enumMappingBehavior, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate))
+                switch (AreTypesMatching(targetTypeGenericArguments[i], proxyTypeGenericArguments[i], assignability, enumMappingBehavior, inputMappingBehavior, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate, reversed))
                 {
                     case MatchingTypesResult.Exact:
                     case MatchingTypesResult.Assignable:
@@ -179,13 +181,40 @@ namespace Nanoray.Pintail
             return matchingTypesResult;
         }
 
+        [Flags]
+        internal enum ParameterFlow
+        {
+            In = 1 << 0,
+            Out = 1 << 1,
+            InOut = In | Out
+        }
+
+        internal static ParameterFlow GetParameterFlow(ParameterInfo targetParameter, ParameterInfo proxyParameter)
+        {
+            if (!targetParameter.ParameterType.IsByRef)
+                return ParameterFlow.In;
+            if (targetParameter.IsOut && proxyParameter.IsOut)
+                return ParameterFlow.Out;
+            if (targetParameter.IsIn && proxyParameter.IsIn)
+                return ParameterFlow.In;
+            return ParameterFlow.InOut;
+        }
+
+        internal static bool CanBeRoundTripped(Type type)
+        {
+            return !type.GetNonRefType().IsAssignableTo(typeof(Delegate));
+        }
+
+
         internal static PositionConversion?[]? MatchProxyMethod(
             MethodInfo targetMethod,
             MethodInfo proxyMethod,
             ProxyManagerEnumMappingBehavior enumMappingBehavior,
+            ProxyManagerInputMappingBehavior inputMappingBehavior,
             ImmutableHashSet<Type> assumeMappableIfRecursed,
             ConcurrentDictionary<string, List<Type>> interfaceMappabilityCache,
-            bool includePrivate
+            bool includePrivate,
+            bool reversed
         )
         {
             // checking if `targetMethod` matches `proxyMethod`
@@ -201,7 +230,11 @@ namespace Nanoray.Pintail
                 return null;
             var positionConversions = new PositionConversion?[mParameters.Length + 1]; // 0 = return type; n + 1 = parameter position n
 
-            switch (AreTypesMatching(targetMethod.ReturnType, proxyMethod.ReturnType, MethodTypeAssignability.AssignFrom, enumMappingBehavior, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate))
+            var returnTypeResult = AreTypesMatching(targetMethod.ReturnType, proxyMethod.ReturnType, MethodTypeAssignability.AssignFrom, enumMappingBehavior, inputMappingBehavior, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate, reversed);
+            if (returnTypeResult == MatchingTypesResult.False && inputMappingBehavior == ProxyManagerInputMappingBehavior.AllowRoundTrip && reversed && CanBeRoundTripped(targetMethod.ReturnType))
+                returnTypeResult = AreTypesMatching(targetMethod.ReturnType, proxyMethod.ReturnType, MethodTypeAssignability.AssignTo, enumMappingBehavior, inputMappingBehavior, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate, reversed);
+
+            switch(returnTypeResult)
             {
                 case MatchingTypesResult.False:
                     return null;
@@ -215,7 +248,31 @@ namespace Nanoray.Pintail
 
             for (int i = 0; i < mParameters.Length; i++)
             {
-                switch (AreTypesMatching(mParameters[i].ParameterType, proxyMethodParameters[i].ParameterType, MethodTypeAssignability.AssignTo, enumMappingBehavior, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate))
+                var targetParameterType = mParameters[i].ParameterType;
+
+                MatchingTypesResult Match(MethodTypeAssignability assignability)
+                    => AreTypesMatching(targetParameterType, proxyMethodParameters[i].ParameterType, assignability, enumMappingBehavior, inputMappingBehavior, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate, reversed);
+
+                var parameterFlow = GetParameterFlow(mParameters[i], proxyMethodParameters[i]);
+                var parameterResult = MatchingTypesResult.Exact;
+
+                if (parameterFlow.HasFlag(ParameterFlow.In))
+                {
+                    var inResult = Match(MethodTypeAssignability.AssignTo);
+                    if (inResult == MatchingTypesResult.False && inputMappingBehavior == ProxyManagerInputMappingBehavior.AllowRoundTrip && !reversed && CanBeRoundTripped(targetParameterType))
+                        inResult = Match(MethodTypeAssignability.AssignFrom);
+                    parameterResult = (MatchingTypesResult)Math.Min((int)parameterResult, (int)inResult);
+                }
+
+                if (parameterFlow.HasFlag(ParameterFlow.Out))
+                {
+                    var outResult = Match(MethodTypeAssignability.AssignFrom);
+                    if (outResult == MatchingTypesResult.False && inputMappingBehavior == ProxyManagerInputMappingBehavior.AllowRoundTrip && reversed && CanBeRoundTripped(targetParameterType))
+                        outResult = Match(MethodTypeAssignability.AssignTo);
+                    parameterResult = (MatchingTypesResult)Math.Min((int)parameterResult, (int)outResult);
+                }
+
+                switch(parameterResult)
                 {
                     case MatchingTypesResult.False:
                         return null;
@@ -239,10 +296,12 @@ namespace Nanoray.Pintail
             Type proxy,
             bool delegateCheck,
             ProxyManagerEnumMappingBehavior enumMappingBehavior,
+            ProxyManagerInputMappingBehavior inputMappingBehavior,
             MethodTypeAssignability assignability,
             ImmutableHashSet<Type> assumeMappableIfRecursed,
             ConcurrentDictionary<string, List<Type>> interfaceMappabilityCache,
-            bool includePrivate
+            bool includePrivate,
+            bool reversed
         )
         {
             // If it's just assignable, we can skip the whole reflection logic
@@ -271,7 +330,7 @@ namespace Nanoray.Pintail
                 return false;
 
             // check the cache.
-            string cachekey = $"{target.AssemblyQualifiedName ?? $"{target.Assembly.GetName().FullName}??{target.Namespace}??{target.Name}"}@@{enumMappingBehavior:D}@@{assignability:D}"; //sometimes AssemblyQualifiedName is null
+            string cachekey = $"{target.AssemblyQualifiedName ?? $"{target.Assembly.GetName().FullName}??{target.Namespace}??{target.Name}"}@@{enumMappingBehavior:D}@@{assignability:D}@@{inputMappingBehavior:D}@@{(reversed && inputMappingBehavior == ProxyManagerInputMappingBehavior.AllowRoundTrip ? 1 : 0)}"; //sometimes AssemblyQualifiedName is null
             if (interfaceMappabilityCache.TryGetValue(cachekey, out List<Type>? types))
             {
                 if (types.Contains(proxy))
@@ -297,7 +356,8 @@ namespace Nanoray.Pintail
                     if (delegateCheck && assignFromMethod.Name != "Invoke")
                         continue;
 
-                    if (MatchProxyMethod(assignFromMethod, assignToMethod, enumMappingBehavior, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate) is not null)
+                    // For AssignTo, methods are matched the other way around and thus reversed is flipped.
+                    if (MatchProxyMethod(assignFromMethod, assignToMethod, enumMappingBehavior, inputMappingBehavior, assumeMappableIfRecursed, interfaceMappabilityCache, includePrivate, assignability == MethodTypeAssignability.AssignTo ? !reversed : reversed) is not null)
                     {
                         foundMethods.Add(assignFromMethod);
                         goto NextMethod;
